@@ -1,4 +1,6 @@
-streamlit
-pandas
-plotly
+streamlit>=1.33
+pandas>=2.0
+numpy>=1.26
+plotly>=5.0
 openpyxl
+XlsxWriter
