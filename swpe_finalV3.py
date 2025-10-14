@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from typing import Callable, Optional, Tuple
+import math
 
 
 st.set_page_config(
@@ -57,6 +58,22 @@ DARK_STYLE = """
     border-radius: 10px;
     border: 1px solid rgba(90, 112, 255, 0.25);
     color: #f5f7ff !important;
+}
+[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] {
+    background: #ffffff;
+    border-radius: 10px;
+    color: #1f2937 !important;
+    border: 1px solid rgba(15, 23, 42, 0.22);
+}
+[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] div,
+[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] input {
+    color: #1f2937 !important;
+}
+[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] svg {
+    fill: #1f2937 !important;
+}
+[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] input::placeholder {
+    color: rgba(31, 41, 55, 0.6) !important;
 }
 [data-testid="stSidebar"] .stButton > button,
 [data-testid="stSidebar"] .stDownloadButton > button {
@@ -120,9 +137,14 @@ div[data-testid="stVerticalBlock"] > div:has(> div.swpe-sticky-marker) {
     margin-bottom: 1.6rem;
 }
 div[data-testid="stVerticalBlock"] > div:has(> div.swpe-sticky-marker) .stDateInput > div > div > input {
-    background: rgba(24, 29, 44, 0.85);
+    background: #ffffff;
     border-radius: 12px;
-    border: 1px solid rgba(90, 112, 255, 0.16);
+    border: 1px solid rgba(15, 23, 42, 0.22);
+    color: #1f2937 !important;
+    caret-color: #2563eb;
+}
+div[data-testid="stVerticalBlock"] > div:has(> div.swpe-sticky-marker) .stDateInput input::placeholder {
+    color: rgba(31, 41, 55, 0.55);
 }
 div[data-testid="stVerticalBlock"] > div:has(> div.swpe-sticky-marker) label {
     font-weight: 600;
@@ -421,6 +443,9 @@ def plot_swpe(
     revenue_axis_log: bool = False,
     show_range_buttons: bool = True,
     show_range_slider: bool = True,
+    swpe_autoscale: bool = True,
+    swpe_y_min: Optional[float] = None,
+    swpe_y_max: Optional[float] = None,
 ) -> go.Figure:
     """Renderiza o grafico principal de SWPE com opcoes interativas."""
     if df.empty:
@@ -630,12 +655,19 @@ def plot_swpe(
         ),
     )
 
-    fig.update_yaxes(
+    swpe_axis_config = dict(
         showgrid=True,
         gridcolor="rgba(231, 236, 255, 0.08)",
         title_text="SWPE",
         secondary_y=False,
     )
+    if not swpe_autoscale and swpe_y_min is not None and swpe_y_max is not None and swpe_y_min < swpe_y_max:
+        swpe_axis_config["range"] = [swpe_y_min, swpe_y_max]
+        swpe_axis_config["autorange"] = False
+    else:
+        swpe_axis_config["autorange"] = True
+    fig.update_yaxes(**swpe_axis_config)
+
     fig.update_yaxes(
         showgrid=False,
         title_text="Revenue (EMA)",
@@ -1201,11 +1233,63 @@ def render_dashboard():
                 st.checkbox("Range slider", key="show_range_slider")
             with toggles_row[1]:
                 st.checkbox("Eixo revenue log", key="revenue_axis_log")
+                st.checkbox(
+                    "Autoscale eixo SWPE",
+                    key="swpe_autoscale",
+                    value=st.session_state.get("swpe_autoscale", True),
+                    help="Habilite para o eixo vertical do SWPE ajustar automaticamente o intervalo."
+                )
             with toggles_row[2]:
                 st.caption("EMAs de revenue")
                 st.checkbox("EMA-7", key="show_rev_ema7")
                 st.checkbox("EMA-14", key="show_rev_ema14")
                 st.checkbox("EMA-30", key="show_rev_ema30")
+
+        swpe_axis_min = None
+        swpe_axis_max = None
+        manual_range_valid = False
+        autoscale_enabled = st.session_state.get("swpe_autoscale", True)
+        if not autoscale_enabled:
+            swpe_series = (
+                pd.to_numeric(df_swpe.get("SWPE"), errors="coerce")
+                if "SWPE" in df_swpe.columns
+                else pd.Series(dtype="float64")
+            )
+            swpe_series = swpe_series.replace([np.inf, -np.inf], np.nan).dropna()
+            if swpe_series.empty:
+                st.info("Sem valores de SWPE suficientes para ajuste manual; autoscale aplicado automaticamente.")
+                autoscale_enabled = True
+            else:
+                base_min = float(swpe_series.min())
+                base_max = float(swpe_series.max())
+                if math.isclose(base_min, base_max, rel_tol=1e-9, abs_tol=1e-9):
+                    padding = max(abs(base_min) * 0.05, 1.0)
+                    base_min -= padding
+                    base_max += padding
+                default_min = float(st.session_state.get("swpe_axis_min_value", base_min))
+                default_max = float(st.session_state.get("swpe_axis_max_value", base_max))
+                step_span = abs(base_max - base_min)
+                step_value = max(round(step_span / 100, 6), 0.01)
+
+                manual_cols = st.columns(2)
+                swpe_axis_min = manual_cols[0].number_input(
+                    "SWPE m�nimo",
+                    value=default_min,
+                    step=step_value,
+                    key="swpe_axis_min_value",
+                    help="Defina o limite inferior do eixo SWPE."
+                )
+                swpe_axis_max = manual_cols[1].number_input(
+                    "SWPE m�ximo",
+                    value=default_max,
+                    step=step_value,
+                    key="swpe_axis_max_value",
+                    help="Defina o limite superior do eixo SWPE."
+                )
+                manual_range_valid = swpe_axis_min < swpe_axis_max
+                if not manual_range_valid:
+                    st.warning("O valor m�nimo precisa ser menor que o m�ximo para aplicar o ajuste manual. Autoscale ativado.")
+                    autoscale_enabled = True
 
         subtitle = f"Modo {mode.upper()} | {calc_mode}"
         if calc_mode == "MCAP - TVL":
@@ -1221,6 +1305,9 @@ def render_dashboard():
             revenue_axis_log=st.session_state.get("revenue_axis_log", False),
             show_range_buttons=st.session_state.get("show_range_buttons", True),
             show_range_slider=st.session_state.get("show_range_slider", True),
+            swpe_autoscale=autoscale_enabled or not manual_range_valid,
+            swpe_y_min=swpe_axis_min if manual_range_valid else None,
+            swpe_y_max=swpe_axis_max if manual_range_valid else None,
         )
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Faixas sombreadas destacam períodos em que o SWPE está abaixo (barato) ou acima (caro) da mediana.")
